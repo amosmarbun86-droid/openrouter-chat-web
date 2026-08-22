@@ -12,6 +12,7 @@
     --panel: #f5f5f5;
     --bubble-user: #e6f0ff;
     --bubble-ai: #f0f0f0;
+    --danger: #d33;
   }
   body.dark {
     --bg: #121212;
@@ -54,10 +55,19 @@
     padding: 10px;
     margin-bottom: 10px;
     background: var(--panel);
-    max-height: 200px;
+    max-height: 260px;
     overflow-y: auto;
   }
   #sidebar.open { display: block; }
+  #searchInput {
+    width: 100%;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+  }
   .chatItem {
     display: flex;
     justify-content: space-between;
@@ -65,15 +75,24 @@
     padding: 6px;
     border-bottom: 1px solid var(--border);
     cursor: pointer;
+    gap: 4px;
   }
   .chatItem.active { font-weight: bold; }
+  .chatItem .chatTitle {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .chatItem button {
     background: none;
     border: none;
-    color: #d33;
+    color: var(--text);
     cursor: pointer;
-    font-size: 16px;
+    font-size: 14px;
+    padding: 2px 4px;
   }
+  .chatItem .delBtn { color: var(--danger); }
   #newChatBtn {
     width: 100%;
     padding: 8px;
@@ -84,32 +103,56 @@
     color: var(--text);
     cursor: pointer;
   }
-  #modelRow { margin-bottom: 8px; }
+  #modelRow { margin-bottom: 8px; display: flex; gap: 8px; }
   #modelSelect {
-    width: 100%;
+    flex: 1;
     padding: 6px;
     border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--text);
   }
+  #exportBtn {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
   #chatBox {
     border: 1px solid var(--border);
     border-radius: 8px;
-    height: 55vh;
+    height: 52vh;
     overflow-y: auto;
     padding: 10px;
     margin-bottom: 10px;
   }
+  .msgRow { margin: 8px 0; display: flex; flex-direction: column; }
+  .msgRow.user { align-items: flex-end; }
+  .msgRow.ai { align-items: flex-start; }
   .msg {
-    margin: 8px 0;
     padding: 8px 10px;
     border-radius: 8px;
     max-width: 85%;
     white-space: pre-wrap;
   }
-  .user { background: var(--bubble-user); margin-left: auto; }
-  .ai { background: var(--bubble-ai); margin-right: auto; }
+  .user .msg { background: var(--bubble-user); }
+  .ai .msg { background: var(--bubble-ai); }
+  .msgActions { margin-top: 2px; }
+  .msgActions button {
+    background: none;
+    border: none;
+    color: var(--text);
+    opacity: 0.6;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .typing {
+    font-style: italic;
+    opacity: 0.7;
+    font-size: 13px;
+  }
   #inputArea { display: flex; gap: 8px; }
   #userInput {
     flex: 1;
@@ -127,9 +170,67 @@
     color: var(--text);
     cursor: pointer;
   }
+  #sendBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+  footer {
+    text-align: center;
+    font-size: 12px;
+    color: gray;
+    margin-top: 12px;
+  }
+  #passwordOverlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  #passwordBox {
+    background: var(--bg);
+    color: var(--text);
+    padding: 20px;
+    border-radius: 10px;
+    width: 90%;
+    max-width: 320px;
+    text-align: center;
+  }
+  #passwordBox input {
+    width: 100%;
+    padding: 8px;
+    margin: 10px 0;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+  }
+  #passwordBox button {
+    width: 100%;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  #passwordError {
+    color: var(--danger);
+    font-size: 13px;
+    min-height: 18px;
+  }
 </style>
 </head>
 <body>
+
+<div id="passwordOverlay">
+  <div id="passwordBox">
+    <h3>🔒 Masuk ke Chat</h3>
+    <p style="font-size:13px;">Masukkan password untuk mengakses AI Chat ini.</p>
+    <input type="password" id="passwordInput" placeholder="Password">
+    <div id="passwordError"></div>
+    <button onclick="submitPassword()">Masuk</button>
+  </div>
+</div>
 
 <header>
   <button id="menuBtn" onclick="toggleSidebar()">☰</button>
@@ -139,6 +240,7 @@
 
 <div id="sidebar">
   <button id="newChatBtn" onclick="newChat()">🆕 New Chat</button>
+  <input type="text" id="searchInput" placeholder="🔍 Cari chat..." oninput="renderSidebar()">
   <div id="chatList"></div>
 </div>
 
@@ -149,6 +251,7 @@
     <option value="google/gemini-flash-1.5">Gemini Flash 1.5</option>
     <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (free)</option>
   </select>
+  <button id="exportBtn" onclick="exportChat()">📤</button>
 </div>
 
 <div id="chatBox"></div>
@@ -156,13 +259,13 @@
   <input type="text" id="userInput" placeholder="Ketik pesan...">
   <button id="sendBtn" onclick="sendMessage()">Kirim</button>
 </div>
-<p style="text-align:center; font-size:12px; color:gray; margin-top:12px;">
-  Powered by Amos'rcpdroid86
-</p>
+
+<footer>Powered by Amos'rcpdroid86</footer>
 
 <script>
 let chats = {};
 let activeChatId = null;
+let chatPassword = null;
 
 function loadState() {
   const saved = localStorage.getItem('chats');
@@ -183,7 +286,25 @@ function loadState() {
   if (localStorage.getItem('darkMode') === 'true') {
     document.body.classList.add('dark');
   }
+
+  chatPassword = localStorage.getItem('chatPassword');
+  if (chatPassword) {
+    document.getElementById('passwordOverlay').style.display = 'none';
+  }
 }
+
+function submitPassword() {
+  const val = document.getElementById('passwordInput').value.trim();
+  if (!val) return;
+  chatPassword = val;
+  localStorage.setItem('chatPassword', val);
+  document.getElementById('passwordOverlay').style.display = 'none';
+  document.getElementById('passwordError').textContent = '';
+}
+
+document.getElementById('passwordInput').addEventListener('keypress', function(e) {
+  if (e.key === 'Enter') submitPassword();
+});
 
 function saveState() {
   localStorage.setItem('chats', JSON.stringify(chats));
@@ -220,6 +341,16 @@ function deleteChat(id, event) {
   renderMessages();
 }
 
+function renameChat(id, event) {
+  event.stopPropagation();
+  const newTitle = prompt('Ganti nama chat:', chats[id].title);
+  if (newTitle && newTitle.trim()) {
+    chats[id].title = newTitle.trim().slice(0, 40);
+    saveState();
+    renderSidebar();
+  }
+}
+
 function switchChat(id) {
   activeChatId = id;
   saveState();
@@ -231,16 +362,29 @@ function switchChat(id) {
 function renderSidebar() {
   const list = document.getElementById('chatList');
   list.innerHTML = '';
+  const query = (document.getElementById('searchInput').value || '').toLowerCase();
+
   Object.values(chats).reverse().forEach(chat => {
+    const matchTitle = chat.title.toLowerCase().includes(query);
+    const matchContent = chat.messages.some(m => m.content.toLowerCase().includes(query));
+    if (query && !matchTitle && !matchContent) return;
+
     const div = document.createElement('div');
     div.className = 'chatItem' + (chat.id === activeChatId ? ' active' : '');
     div.onclick = () => switchChat(chat.id);
 
     const span = document.createElement('span');
+    span.className = 'chatTitle';
     span.textContent = chat.title;
     div.appendChild(span);
 
+    const renameBtn = document.createElement('button');
+    renameBtn.textContent = '✏️';
+    renameBtn.onclick = (e) => renameChat(chat.id, e);
+    div.appendChild(renameBtn);
+
     const delBtn = document.createElement('button');
+    delBtn.className = 'delBtn';
     delBtn.textContent = '🗑️';
     delBtn.onclick = (e) => deleteChat(chat.id, e);
     div.appendChild(delBtn);
@@ -262,12 +406,31 @@ function renderMessages() {
 
 function addMessageToBox(role, text, scroll = true) {
   const chatBox = document.getElementById('chatBox');
-  const div = document.createElement('div');
-  div.className = 'msg ' + (role === 'user' ? 'user' : 'ai');
-  div.textContent = text;
-  chatBox.appendChild(div);
+  const row = document.createElement('div');
+  row.className = 'msgRow ' + (role === 'user' ? 'user' : 'ai');
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg';
+  bubble.textContent = text;
+  row.appendChild(bubble);
+
+  if (role !== 'user') {
+    const actions = document.createElement('div');
+    actions.className = 'msgActions';
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = '📋 Copy';
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(bubble.textContent);
+      copyBtn.textContent = '✅ Disalin';
+      setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 1500);
+    };
+    actions.appendChild(copyBtn);
+    row.appendChild(actions);
+  }
+
+  chatBox.appendChild(row);
   if (scroll) chatBox.scrollTop = chatBox.scrollHeight;
-  return div;
+  return bubble;
 }
 
 function toggleSidebar() {
@@ -283,10 +446,54 @@ function onModelChange() {
   localStorage.setItem('selectedModel', document.getElementById('modelSelect').value);
 }
 
+function exportChat() {
+  const chat = chats[activeChatId];
+  if (!chat || chat.messages.length === 0) {
+    alert('Belum ada percakapan untuk diexport.');
+    return;
+  }
+  let text = 'Chat: ' + chat.title + '\n\n';
+  chat.messages.forEach(m => {
+    text += (m.role === 'user' ? 'Kamu' : 'AI') + ': ' + m.content + '\n\n';
+  });
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = chat.title.replace(/[^a-z0-9]/gi, '_') + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function canSendNow() {
+  const now = Date.now();
+  let timestamps = JSON.parse(localStorage.getItem('msgTimestamps') || '[]');
+  timestamps = timestamps.filter(t => now - t < 60000);
+  if (timestamps.length >= 15) {
+    return false;
+  }
+  timestamps.push(now);
+  localStorage.setItem('msgTimestamps', JSON.stringify(timestamps));
+  return true;
+}
+
 async function sendMessage() {
   const input = document.getElementById('userInput');
   const text = input.value.trim();
   if (!text) return;
+
+  if (!chatPassword) {
+    document.getElementById('passwordOverlay').style.display = 'flex';
+    return;
+  }
+
+  if (!canSendNow()) {
+    alert('Terlalu banyak pesan dalam waktu singkat. Tunggu sebentar ya.');
+    return;
+  }
+
+  const sendBtn = document.getElementById('sendBtn');
+  sendBtn.disabled = true;
 
   const chat = chats[activeChatId];
   chat.messages.push({ role: 'user', content: text });
@@ -299,19 +506,32 @@ async function sendMessage() {
   renderSidebar();
 
   const model = document.getElementById('modelSelect').value;
-  const aiDiv = addMessageToBox('ai', '');
+  const aiBubble = addMessageToBox('ai', '');
+  aiBubble.classList.add('typing');
+  aiBubble.textContent = 'AI sedang mengetik...';
   let aiText = '';
+  let firstChunk = true;
 
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: chat.messages, model: model, stream: true })
+      body: JSON.stringify({ messages: chat.messages, model: model, stream: true, password: chatPassword })
     });
 
+    if (response.status === 401) {
+      aiBubble.classList.remove('typing');
+      aiBubble.textContent = 'Password salah. Silakan masukkan ulang.';
+      localStorage.removeItem('chatPassword');
+      chatPassword = null;
+      document.getElementById('passwordOverlay').style.display = 'flex';
+      document.getElementById('passwordError').textContent = 'Password salah, coba lagi.';
+      return;
+    }
+
     if (!response.ok || !response.body) {
-      const errData = await response.json().catch(() => ({}));
-      aiDiv.textContent = 'Terjadi error: ' + JSON.stringify(errData);
+      aiBubble.classList.remove('typing');
+      aiBubble.textContent = 'Terjadi error saat menghubungi server. Coba lagi beberapa saat.';
       return;
     }
 
@@ -336,19 +556,35 @@ async function sendMessage() {
           const json = JSON.parse(payload);
           const delta = json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content;
           if (delta) {
+            if (firstChunk) {
+              aiBubble.classList.remove('typing');
+              firstChunk = false;
+            }
             aiText += delta;
-            aiDiv.textContent = aiText;
+            aiBubble.textContent = aiText;
             document.getElementById('chatBox').scrollTop = document.getElementById('chatBox').scrollHeight;
           }
         } catch (e) {}
       }
     }
 
-    chat.messages.push({ role: 'assistant', content: aiText });
-    saveState();
+    if (!aiText) {
+      aiBubble.classList.remove('typing');
+      aiBubble.textContent = 'AI tidak memberikan balasan. Coba kirim ulang pesan.';
+    } else {
+      chat.messages.push({ role: 'assistant', content: aiText });
+      saveState();
+    }
 
   } catch (err) {
-    aiDiv.textContent = 'Error: ' + err.message;
+    aiBubble.classList.remove('typing');
+    if (err instanceof TypeError) {
+      aiBubble.textContent = 'Tidak bisa terhubung ke server. Periksa koneksi internet kamu.';
+    } else {
+      aiBubble.textContent = 'Terjadi kesalahan: ' + err.message;
+    }
+  } finally {
+    sendBtn.disabled = false;
   }
 }
 
