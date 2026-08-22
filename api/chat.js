@@ -6,7 +6,11 @@ export default async function handler(req) {
   }
 
   try {
-    const { messages, model, stream } = await req.json();
+    const { messages, model, stream, password } = await req.json();
+
+    if (process.env.CHAT_PASSWORD && password !== process.env.CHAT_PASSWORD) {
+      return new Response(JSON.stringify({ error: 'Password salah' }), { status: 401 });
+    }
 
     const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
