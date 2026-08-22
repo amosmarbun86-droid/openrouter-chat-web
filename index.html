@@ -13,6 +13,7 @@
     --bubble-user: #e6f0ff;
     --bubble-ai: #f0f0f0;
     --danger: #d33;
+    --accent: #2a5adf;
   }
   body.dark {
     --bg: #121212;
@@ -40,6 +41,7 @@
     margin-bottom: 10px;
   }
   header h2 { margin: 0; font-size: 18px; flex: 1; }
+  header .headerBtns { display: flex; gap: 6px; }
   header button {
     background: var(--panel);
     color: var(--text);
@@ -120,6 +122,22 @@
     color: var(--text);
     cursor: pointer;
   }
+  #modeRow { margin-bottom: 8px; display: flex; gap: 6px; }
+  .modeBtn {
+    flex: 1;
+    padding: 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .modeBtn.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
   #chatBox {
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -139,6 +157,12 @@
   }
   .user .msg { background: var(--bubble-user); }
   .ai .msg { background: var(--bubble-ai); }
+  .msg img {
+    max-width: 100%;
+    border-radius: 6px;
+    margin-top: 6px;
+    display: block;
+  }
   .msgActions { margin-top: 2px; }
   .msgActions button {
     background: none;
@@ -153,7 +177,41 @@
     opacity: 0.7;
     font-size: 13px;
   }
+  #imagePreviewWrap {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 6px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+  }
+  #imagePreviewWrap.show { display: flex; }
+  #imagePreviewWrap img {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 6px;
+  }
+  #imagePreviewWrap .previewInfo { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #removeImageBtn {
+    background: none;
+    border: none;
+    color: var(--danger);
+    cursor: pointer;
+    font-size: 16px;
+  }
   #inputArea { display: flex; gap: 8px; }
+  #attachBtn {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  #attachBtn:disabled { opacity: 0.4; cursor: not-allowed; }
   #userInput {
     flex: 1;
     padding: 8px;
@@ -235,7 +293,10 @@
 <header>
   <button id="menuBtn" onclick="toggleSidebar()">☰</button>
   <h2>🤖 OpenRouter AI Chat</h2>
-  <button id="darkBtn" onclick="toggleDark()">🌙</button>
+  <div class="headerBtns">
+    <button id="logoutBtn" onclick="logout()" title="Logout">🚪</button>
+    <button id="darkBtn" onclick="toggleDark()">🌙</button>
+  </div>
 </header>
 
 <div id="sidebar">
@@ -246,18 +307,32 @@
 
 <div id="modelRow">
   <select id="modelSelect" onchange="onModelChange()">
-    <option value="openai/gpt-4o-mini">OpenAI GPT-4o mini</option>
-    <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-    <option value="google/gemini-flash-1.5">Gemini Flash 1.5</option>
+    <option value="openai/gpt-4o-mini">OpenAI GPT-4o mini 📷</option>
+    <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet 📷</option>
+    <option value="google/gemini-flash-1.5">Gemini Flash 1.5 📷</option>
     <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (free)</option>
   </select>
   <button id="exportBtn" onclick="exportChat()">📤</button>
 </div>
 
+<div id="modeRow">
+  <button id="chatModeBtn" class="modeBtn active" onclick="setMode('chat')">💬 Chat</button>
+  <button id="imageModeBtn" class="modeBtn" onclick="setMode('image')">🎨 Generate Gambar</button>
+</div>
+
 <div id="chatBox"></div>
+
+<div id="imagePreviewWrap">
+  <img id="imagePreviewThumb" src="" alt="preview">
+  <div class="previewInfo" id="imagePreviewName"></div>
+  <button id="removeImageBtn" onclick="removeAttachedImage()">✖</button>
+</div>
+
 <div id="inputArea">
+  <button id="attachBtn" onclick="document.getElementById('imageFileInput').click()" title="Lampirkan gambar (vision)">📎</button>
+  <input type="file" id="imageFileInput" accept="image/*" style="display:none" onchange="onImageSelected(event)">
   <input type="text" id="userInput" placeholder="Ketik pesan...">
-  <button id="sendBtn" onclick="sendMessage()">Kirim</button>
+  <button id="sendBtn" onclick="handleSendClick()">Kirim</button>
 </div>
 
 <footer>Powered by Amos'rcpdroid86</footer>
@@ -266,6 +341,15 @@
 let chats = {};
 let activeChatId = null;
 let chatPassword = null;
+let currentMode = 'chat'; // 'chat' atau 'image'
+let attachedImage = null; // { dataUrl, name }
+
+// Model yang mendukung vision (upload gambar untuk ditanya ke AI)
+const VISION_MODELS = new Set([
+  'openai/gpt-4o-mini',
+  'anthropic/claude-3.5-sonnet',
+  'google/gemini-flash-1.5'
+]);
 
 function loadState() {
   const saved = localStorage.getItem('chats');
@@ -298,8 +382,19 @@ function submitPassword() {
   if (!val) return;
   chatPassword = val;
   localStorage.setItem('chatPassword', val);
-  document.getElementById('passwordOverlay').style.display = 'none';
   document.getElementById('passwordError').textContent = '';
+  document.getElementById('passwordInput').value = '';
+  document.getElementById('passwordOverlay').style.display = 'none';
+}
+
+function logout() {
+  if (!confirm('Keluar dari chat? Kamu perlu masukkan password lagi untuk lanjut chat (riwayat chat tetap tersimpan di perangkat ini).')) return;
+  chatPassword = null;
+  localStorage.removeItem('chatPassword');
+  removeAttachedImage();
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('passwordOverlay').style.display = 'flex';
+  document.getElementById('passwordInput').focus();
 }
 
 document.getElementById('passwordInput').addEventListener('keypress', function(e) {
@@ -320,6 +415,7 @@ function createNewChatObject() {
 
 function newChat() {
   createNewChatObject();
+  removeAttachedImage();
   renderSidebar();
   renderMessages();
 }
@@ -354,9 +450,15 @@ function renameChat(id, event) {
 function switchChat(id) {
   activeChatId = id;
   saveState();
+  removeAttachedImage();
   renderSidebar();
   renderMessages();
   document.getElementById('sidebar').classList.remove('open');
+}
+
+// Ambil teks polos dari sebuah pesan, untuk search & export (pesan bisa berisi teks + gambar)
+function getMessageText(m) {
+  return m.text || '';
 }
 
 function renderSidebar() {
@@ -366,7 +468,7 @@ function renderSidebar() {
 
   Object.values(chats).reverse().forEach(chat => {
     const matchTitle = chat.title.toLowerCase().includes(query);
-    const matchContent = chat.messages.some(m => m.content.toLowerCase().includes(query));
+    const matchContent = chat.messages.some(m => getMessageText(m).toLowerCase().includes(query));
     if (query && !matchTitle && !matchContent) return;
 
     const div = document.createElement('div');
@@ -399,12 +501,12 @@ function renderMessages() {
   const chat = chats[activeChatId];
   if (!chat) return;
   chat.messages.forEach(m => {
-    addMessageToBox(m.role, m.content, false);
+    addMessageToBox(m.role, m.text || '', false, m.images || []);
   });
   chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-function addMessageToBox(role, text, scroll = true) {
+function addMessageToBox(role, text, scroll = true, images = []) {
   const chatBox = document.getElementById('chatBox');
   const row = document.createElement('div');
   row.className = 'msgRow ' + (role === 'user' ? 'user' : 'ai');
@@ -412,6 +514,11 @@ function addMessageToBox(role, text, scroll = true) {
   const bubble = document.createElement('div');
   bubble.className = 'msg';
   bubble.textContent = text;
+  images.forEach(url => {
+    const img = document.createElement('img');
+    img.src = url;
+    bubble.appendChild(img);
+  });
   row.appendChild(bubble);
 
   if (role !== 'user') {
@@ -420,7 +527,7 @@ function addMessageToBox(role, text, scroll = true) {
     const copyBtn = document.createElement('button');
     copyBtn.textContent = '📋 Copy';
     copyBtn.onclick = () => {
-      navigator.clipboard.writeText(bubble.textContent);
+      navigator.clipboard.writeText(bubble.firstChild ? bubble.firstChild.textContent || text : text);
       copyBtn.textContent = '✅ Disalin';
       setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 1500);
     };
@@ -446,6 +553,55 @@ function onModelChange() {
   localStorage.setItem('selectedModel', document.getElementById('modelSelect').value);
 }
 
+function setMode(newMode) {
+  currentMode = newMode;
+  document.getElementById('chatModeBtn').classList.toggle('active', newMode === 'chat');
+  document.getElementById('imageModeBtn').classList.toggle('active', newMode === 'image');
+  const input = document.getElementById('userInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const attachBtn = document.getElementById('attachBtn');
+  if (newMode === 'image') {
+    input.placeholder = 'Deskripsikan gambar yang ingin dibuat...';
+    sendBtn.textContent = 'Buat';
+    attachBtn.disabled = true;
+    removeAttachedImage();
+  } else {
+    input.placeholder = 'Ketik pesan...';
+    sendBtn.textContent = 'Kirim';
+    attachBtn.disabled = false;
+  }
+}
+
+function onImageSelected(event) {
+  const file = event.target.files[0];
+  event.target.value = '';
+  if (!file) return;
+
+  if (!VISION_MODELS.has(document.getElementById('modelSelect').value)) {
+    alert('Model yang dipilih tidak mendukung gambar (vision). Pilih GPT-4o mini, Claude 3.5 Sonnet, atau Gemini Flash 1.5 dulu.');
+    return;
+  }
+  if (file.size > 4 * 1024 * 1024) {
+    alert('Ukuran gambar terlalu besar (maks ±4MB). Coba gambar yang lebih kecil.');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    attachedImage = { dataUrl: reader.result, name: file.name };
+    document.getElementById('imagePreviewThumb').src = reader.result;
+    document.getElementById('imagePreviewName').textContent = file.name;
+    document.getElementById('imagePreviewWrap').classList.add('show');
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeAttachedImage() {
+  attachedImage = null;
+  document.getElementById('imagePreviewWrap').classList.remove('show');
+  document.getElementById('imagePreviewThumb').src = '';
+}
+
 function exportChat() {
   const chat = chats[activeChatId];
   if (!chat || chat.messages.length === 0) {
@@ -454,7 +610,9 @@ function exportChat() {
   }
   let text = 'Chat: ' + chat.title + '\n\n';
   chat.messages.forEach(m => {
-    text += (m.role === 'user' ? 'Kamu' : 'AI') + ': ' + m.content + '\n\n';
+    const who = m.role === 'user' ? 'Kamu' : 'AI';
+    const imgNote = (m.images && m.images.length) ? ' [gambar terlampir]' : '';
+    text += who + ': ' + getMessageText(m) + imgNote + '\n\n';
   });
   const blob = new Blob([text], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
@@ -477,10 +635,33 @@ function canSendNow() {
   return true;
 }
 
+function handleSendClick() {
+  if (currentMode === 'image') {
+    generateImage();
+  } else {
+    sendMessage();
+  }
+}
+
+// Bangun payload `messages` gaya OpenAI untuk dikirim ke backend,
+// termasuk multi-part content kalau ada gambar (vision).
+function buildApiMessages(chat) {
+  return chat.messages
+    .filter(m => !m.isImageGen) // hasil generate-gambar tidak dikirim balik sebagai konteks chat teks
+    .map(m => {
+      if (m.images && m.images.length > 0) {
+        const parts = [{ type: 'text', text: m.text || '' }];
+        m.images.forEach(url => parts.push({ type: 'image_url', image_url: { url } }));
+        return { role: m.role, content: parts };
+      }
+      return { role: m.role, content: m.text || '' };
+    });
+}
+
 async function sendMessage() {
   const input = document.getElementById('userInput');
   const text = input.value.trim();
-  if (!text) return;
+  if (!text && !attachedImage) return;
 
   if (!chatPassword) {
     document.getElementById('passwordOverlay').style.display = 'flex';
@@ -496,12 +677,15 @@ async function sendMessage() {
   sendBtn.disabled = true;
 
   const chat = chats[activeChatId];
-  chat.messages.push({ role: 'user', content: text });
+  const userImages = attachedImage ? [attachedImage.dataUrl] : [];
+  const userMsg = { role: 'user', text: text, images: userImages };
+  chat.messages.push(userMsg);
   if (chat.title === 'Chat baru') {
-    chat.title = text.slice(0, 30);
+    chat.title = (text || '📷 Gambar').slice(0, 30);
   }
-  addMessageToBox('user', text);
+  addMessageToBox('user', text, true, userImages);
   input.value = '';
+  removeAttachedImage();
   saveState();
   renderSidebar();
 
@@ -516,7 +700,7 @@ async function sendMessage() {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: chat.messages, model: model, stream: true, password: chatPassword })
+      body: JSON.stringify({ messages: buildApiMessages(chat), model: model, stream: true, password: chatPassword })
     });
 
     if (response.status === 401) {
@@ -572,7 +756,7 @@ async function sendMessage() {
       aiBubble.classList.remove('typing');
       aiBubble.textContent = 'AI tidak memberikan balasan. Coba kirim ulang pesan.';
     } else {
-      chat.messages.push({ role: 'assistant', content: aiText });
+      chat.messages.push({ role: 'assistant', text: aiText, images: [] });
       saveState();
     }
 
@@ -588,8 +772,97 @@ async function sendMessage() {
   }
 }
 
+async function generateImage() {
+  const input = document.getElementById('userInput');
+  const prompt = input.value.trim();
+  if (!prompt) return;
+
+  if (!chatPassword) {
+    document.getElementById('passwordOverlay').style.display = 'flex';
+    return;
+  }
+
+  if (!canSendNow()) {
+    alert('Terlalu banyak permintaan dalam waktu singkat. Tunggu sebentar ya.');
+    return;
+  }
+
+  const sendBtn = document.getElementById('sendBtn');
+  sendBtn.disabled = true;
+
+  const chat = chats[activeChatId];
+  chat.messages.push({ role: 'user', text: prompt, images: [] });
+  if (chat.title === 'Chat baru') {
+    chat.title = ('🎨 ' + prompt).slice(0, 30);
+  }
+  addMessageToBox('user', prompt);
+  input.value = '';
+  saveState();
+  renderSidebar();
+
+  const aiBubble = addMessageToBox('ai', '');
+  aiBubble.classList.add('typing');
+  aiBubble.textContent = 'Membuat gambar...';
+
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'image', prompt: prompt, password: chatPassword })
+    });
+
+    if (response.status === 401) {
+      aiBubble.classList.remove('typing');
+      aiBubble.textContent = 'Password salah. Silakan masukkan ulang.';
+      localStorage.removeItem('chatPassword');
+      chatPassword = null;
+      document.getElementById('passwordOverlay').style.display = 'flex';
+      document.getElementById('passwordError').textContent = 'Password salah, coba lagi.';
+      return;
+    }
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      aiBubble.classList.remove('typing');
+      aiBubble.textContent = 'Gagal membuat gambar: ' + (data.error || 'error tidak diketahui');
+      return;
+    }
+
+    const images = data.images || [];
+    if (images.length === 0) {
+      aiBubble.classList.remove('typing');
+      aiBubble.textContent = data.text || 'Model tidak mengembalikan gambar. Coba model image-generation lain lewat env var IMAGE_MODEL.';
+      chat.messages.push({ role: 'assistant', text: aiBubble.textContent, images: [], isImageGen: true });
+      saveState();
+      return;
+    }
+
+    aiBubble.classList.remove('typing');
+    aiBubble.textContent = data.text || '';
+    images.forEach(url => {
+      const img = document.createElement('img');
+      img.src = url;
+      aiBubble.appendChild(img);
+    });
+
+    chat.messages.push({ role: 'assistant', text: data.text || '', images: images, isImageGen: true });
+    saveState();
+
+  } catch (err) {
+    aiBubble.classList.remove('typing');
+    if (err instanceof TypeError) {
+      aiBubble.textContent = 'Tidak bisa terhubung ke server. Periksa koneksi internet kamu.';
+    } else {
+      aiBubble.textContent = 'Terjadi kesalahan: ' + err.message;
+    }
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
 document.getElementById('userInput').addEventListener('keypress', function(e) {
-  if (e.key === 'Enter') sendMessage();
+  if (e.key === 'Enter') handleSendClick();
 });
 
 loadState();
