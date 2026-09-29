@@ -1,5 +1,24 @@
 export const config = { runtime: 'edge' };
 
+// Origin yang boleh memanggil API ini dari browser (CORS).
+// Tambahkan domain lain di sini kalau perlu.
+const ALLOWED_ORIGINS = [
+  'https://amosmarbun86-droid.github.io',
+  'https://openrouter-chat-web.vercel.app'
+];
+
+function corsHeaders(req) {
+  const origin = req.headers.get('origin');
+  const h = { 'Vary': 'Origin' };
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    h['Access-Control-Allow-Origin'] = origin;
+    h['Access-Control-Allow-Methods'] = 'POST, OPTIONS';
+    h['Access-Control-Allow-Headers'] = 'Content-Type';
+    h['Access-Control-Max-Age'] = '86400';
+  }
+  return h;
+}
+
 // Model default untuk mode "Generate Gambar".
 // Bisa dioverride lewat Environment Variable IMAGE_MODEL di Vercel tanpa ubah kode.
 // PENTING: cek dulu di https://openrouter.ai/models (filter "Image" / "modalities: image")
@@ -7,7 +26,7 @@ export const config = { runtime: 'edge' };
 // bisa berubah sewaktu-waktu.
 const DEFAULT_IMAGE_MODEL = 'google/gemini-2.5-flash-image-preview';
 
-export default async function handler(req) {
+async function mainHandler(req) {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
   }
@@ -99,4 +118,18 @@ export default async function handler(req) {
   } catch (error) {
     return new Response(JSON.stringify({ error: error.message }), { status: 500 });
   }
+}
+
+export default async function handler(req) {
+  const cors = corsHeaders(req);
+
+  // Preflight request dari browser
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: cors });
+  }
+
+  const res = await mainHandler(req);
+  const headers = new Headers(res.headers);
+  for (const [k, v] of Object.entries(cors)) headers.set(k, v);
+  return new Response(res.body, { status: res.status, headers });
 }
