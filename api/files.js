@@ -9,6 +9,9 @@ export const config = { runtime: 'edge' };
 //   FILES_PASSWORD             -> password untuk membuka File Manager
 //   UPSTASH_REDIS_REST_URL     -> dari dashboard Upstash (atau KV_REST_API_URL)
 //   UPSTASH_REDIS_REST_TOKEN   -> dari dashboard Upstash (atau KV_REST_API_TOKEN)
+//   SUPABASE_URL               -> https://ID-PROJECT.supabase.co
+//   SUPABASE_SERVICE_ROLE_KEY  -> kunci rahasia Supabase (HANYA di Vercel)
+//   SUPABASE_BUCKET            -> (opsional) nama bucket private, default: amos-files
 // =====================================================
 
 // Origin yang boleh memanggil API ini dari browser (CORS).
@@ -25,6 +28,8 @@ const MAX_CONTENT_LEN = 200000; // karakter per file
 const MAX_NODES = 2000;         // total folder + file
 const MAX_FAILS = 5;            // salah password maksimal per IP
 const FAIL_WINDOW_SEC = 600;    // dalam 10 menit
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB per file unggahan
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -96,6 +101,46 @@ async function getMeta(id) {
   const raw = await redis(['HGET', META_KEY, id]);
   if (!raw) throw new HttpError(404, 'Item tidak ditemukan');
   return typeof raw === 'string' ? JSON.parse(raw) : raw;
+}
+
+// ---------- Supabase Storage (bucket private) ----------
+function supabaseConfig() {
+  const url = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const bucket = process.env.SUPABASE_BUCKET || 'amos-files';
+  if (!url || !key) {
+    throw new HttpError(500, 'Penyimpanan file (Supabase) belum dikonfigurasi di server');
+  }
+  return { url, key, bucket };
+}
+
+// Kunci baru (sb_secret_...) hanya dikirim lewat header apikey;
+// kunci lama berformat JWT (eyJ...) juga dikirim sebagai Bearer.
+function supabaseHeaders(key) {
+  const h = { 'apikey': key, 'Content-Type': 'application/json' };
+  if (key.startsWith('eyJ')) h['Authorization'] = `Bearer ${key}`;
+  return h;
+}
+
+async function supabase(method, path, body) {
+  const { url, key } = supabaseConfig();
+  const res = await fetch(`${url}/storage/v1${path}`, {
+    method,
+    headers: supabaseHeaders(key),
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* tidak ada body JSON */ }
+  if (!res.ok) {
+    console.error('Supabase error', res.status, data);
+    throw new HttpError(502, 'Penyimpanan file gagal merespons');
+  }
+  return data;
+}
+
+function absStorageUrl(rel) {
+  const { url } = supabaseConfig();
+  return /^https?:/i.test(rel) ? rel : `${url}/storage/v1${rel}`;
 }
 
 // ---------- Validasi ----------
@@ -213,7 +258,7 @@ async function mainHandler(req) {
           node.name = name;
         }
         if (body.content !== undefined) {
-          if (node.type !== 'file') throw new HttpError(400, 'Folder tidak punya isi');
+          if (node.type !== 'file') throw new HttpError(400, 'Hanya file teks yang punya isi');
           assertContent(body.content);
           await redis(['HSET', CONTENT_KEY, node.id, body.content]);
           node.size = body.content.length;
@@ -221,6 +266,83 @@ async function mainHandler(req) {
         node.updatedAt = Date.now();
         await redis(['HSET', META_KEY, node.id, JSON.stringify(node)]);
         return json({ node });
+      }
+
+      case 'upload-init': {
+        const name = cleanName(body.name);
+        const parent = body.parent || null;
+        const size = Number(body.size);
+        if (!Number.isFinite(size) || size <= 0) throw new HttpError(400, 'Ukuran file tidak valid');
+        if (size > MAX_UPLOAD_BYTES) throw new HttpError(413, 'File terlalu besar (maks 50 MB)');
+
+        const all = await getAllMeta();
+        if (Object.keys(all).length >= MAX_NODES) throw new HttpError(400, 'Batas jumlah item tercapai');
+        if (parent) {
+          const p = all[parent];
+          if (!p || p.type !== 'folder') throw new HttpError(404, 'Folder tujuan tidak ditemukan');
+        }
+        assertUniqueName(all, parent, name, null);
+
+        const { bucket } = supabaseConfig();
+        const id = crypto.randomUUID();
+        const data = await supabase('POST', `/object/upload/sign/${encodeURIComponent(bucket)}/${id}`, {});
+        if (!data || !data.url) throw new HttpError(502, 'Penyimpanan file gagal membuat izin unggah');
+        return json({ id, uploadUrl: absStorageUrl(data.url) });
+      }
+
+      case 'upload-commit': {
+        const id = body.id;
+        if (typeof id !== 'string' || !UUID_RE.test(id)) throw new HttpError(400, 'ID tidak valid');
+        const name = cleanName(body.name);
+        const parent = body.parent || null;
+        const mime = (typeof body.mime === 'string' && body.mime && body.mime.length <= 100)
+          ? body.mime : 'application/octet-stream';
+
+        const all = await getAllMeta();
+        if (all[id]) throw new HttpError(409, 'File sudah tercatat');
+        if (Object.keys(all).length >= MAX_NODES) throw new HttpError(400, 'Batas jumlah item tercapai');
+        if (parent) {
+          const p = all[parent];
+          if (!p || p.type !== 'folder') throw new HttpError(404, 'Folder tujuan tidak ditemukan');
+        }
+        assertUniqueName(all, parent, name, null);
+
+        // Pastikan file benar-benar sudah ada di penyimpanan
+        const { bucket } = supabaseConfig();
+        let info = null;
+        try {
+          info = await supabase('GET', `/object/info/${encodeURIComponent(bucket)}/${id}`);
+        } catch (e) {
+          // Cadangan: cari lewat daftar objek (endpoint info bisa berbeda antar versi Supabase)
+          try {
+            const found = await supabase('POST', `/object/list/${encodeURIComponent(bucket)}`, { prefix: '', search: id, limit: 5 });
+            const obj = Array.isArray(found) ? found.find((o) => o.name === id) : null;
+            if (obj) info = { size: obj.metadata && obj.metadata.size };
+          } catch (e2) { /* diabaikan, ditangani di bawah */ }
+        }
+        if (!info) throw new HttpError(400, 'File belum terunggah ke penyimpanan');
+        let size = Number(info && info.size);
+        if (!Number.isFinite(size)) size = Number(body.size) || 0;
+        if (size > MAX_UPLOAD_BYTES) throw new HttpError(413, 'File terlalu besar (maks 50 MB)');
+
+        const node = { id, type: 'upload', name, parent, size, mime, updatedAt: Date.now() };
+        await redis(['HSET', META_KEY, node.id, JSON.stringify(node)]);
+        return json({ node }, 201);
+      }
+
+      case 'download-url': {
+        const node = await getMeta(body.id);
+        if (node.type !== 'upload') throw new HttpError(400, 'Itu bukan file unggahan');
+        const { bucket } = supabaseConfig();
+        const expiresIn = body.download ? 300 : 3600;
+        const data = await supabase('POST', `/object/sign/${encodeURIComponent(bucket)}/${node.id}`, { expiresIn });
+        const rel = data && (data.signedURL || data.signedUrl);
+        if (!rel) throw new HttpError(502, 'Penyimpanan file gagal membuat link');
+        let url = absStorageUrl(rel);
+        if (body.download) {
+          url += (url.includes('?') ? '&' : '?') + 'download=' + encodeURIComponent(node.name);
+        }
+        return json({ url });
       }
 
       case 'delete': {
@@ -240,6 +362,14 @@ async function mainHandler(req) {
           }
         }
         const ids = [...toDelete];
+
+        // Hapus juga file unggahan di Supabase (sebelum catatannya dihapus)
+        const uploadIds = ids.filter(i => all[i] && all[i].type === 'upload');
+        if (uploadIds.length) {
+          const { bucket } = supabaseConfig();
+          await supabase('DELETE', `/object/${encodeURIComponent(bucket)}`, { prefixes: uploadIds });
+        }
+
         await redis(['HDEL', META_KEY, ...ids]);
         await redis(['HDEL', CONTENT_KEY, ...ids]);
         return json({ deleted: ids.length });
