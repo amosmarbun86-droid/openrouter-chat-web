@@ -1,7 +1,7 @@
 export const config = { runtime: 'edge' };
 
 // =====================================================
-// AMOS FILE MANAGER API
+// AMOS FILE MANAGER API  (VERSI DEBUG: error server menampilkan penyebab asli)
 // Simpan folder & file teks di database (Upstash Redis), bukan di browser.
 // Semua request wajib menyertakan password yang dicek di server.
 //
@@ -77,7 +77,7 @@ async function redis(cmd) {
     body: JSON.stringify(cmd)
   });
   const data = await res.json();
-  if (!res.ok || data.error) throw new Error(data.error || 'Redis error');
+  if (!res.ok || data.error) throw new Error('Redis: ' + (data.error || ('status ' + res.status)));
   return data.result;
 }
 
@@ -133,7 +133,8 @@ async function supabase(method, path, body) {
   try { data = await res.json(); } catch (e) { /* tidak ada body JSON */ }
   if (!res.ok) {
     console.error('Supabase error', res.status, data);
-    throw new HttpError(502, 'Penyimpanan file gagal merespons');
+    const why = data && (data.message || data.error) ? String(data.message || data.error).slice(0, 150) : '';
+    throw new HttpError(502, `Penyimpanan file gagal merespons (${res.status}${why ? ': ' + why : ''})`);
   }
   return data;
 }
@@ -173,6 +174,9 @@ function assertContent(content) {
 async function mainHandler(req) {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
+  let currentAction = 'unknown';
+  let authed = false; // detail error hanya ditampilkan setelah password benar
+
   try {
     if (!process.env.FILES_PASSWORD) {
       throw new HttpError(500, 'FILES_PASSWORD belum diset di server');
@@ -182,6 +186,7 @@ async function mainHandler(req) {
     try { body = await req.json(); } catch (e) { throw new HttpError(400, 'Body tidak valid'); }
     body = body || {};
     const { action, password } = body;
+    currentAction = String(action);
 
     // Batasi percobaan password salah per IP
     const ip = (req.headers.get('x-forwarded-for') || 'unknown').split(',')[0].trim();
@@ -196,6 +201,7 @@ async function mainHandler(req) {
       throw new HttpError(401, 'Password salah');
     }
     if (fails > 0) await redis(['DEL', failKey]);
+    authed = true;
 
     switch (action) {
       case 'auth':
@@ -380,8 +386,12 @@ async function mainHandler(req) {
     }
   } catch (err) {
     if (err instanceof HttpError) return json({ error: err.message }, err.status);
-    console.error(err);
-    return json({ error: 'Terjadi kesalahan di server' }, 500);
+    console.error('files api error [' + currentAction + ']', err);
+    // DEBUG: tampilkan penyebab asli, tapi hanya kalau password sudah benar
+    const detail = authed
+      ? ' [' + currentAction + '] ' + String((err && err.message) || err).slice(0, 200)
+      : '';
+    return json({ error: 'Terjadi kesalahan di server' + detail }, 500);
   }
 }
 
